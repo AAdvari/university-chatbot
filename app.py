@@ -449,20 +449,16 @@ if user_input:
                 render_round_result(result)
             st.stop()
 
-        # --- Layer 1: Our clarification_module (VDB-based until one clear question) ---
         response, clarification_done = our_clarification.process(user_input)
-
         if not clarification_done:
             loading_ph.empty()
             st.session_state.messages.append({"role": "assistant", "content": response})
             st.caption("🔍 روشن‌سازی سوال (مرحله ۱)")
             st.markdown(response)
             st.stop()
-
         # Clarification_module done → clarified question
         clarified_question = response
         our_clarification.reset_session()
-
         loading_ph.empty()
         st.markdown(f"**سوال روشن‌شده:** {clarified_question}")
         st.caption("مرحله ۲: بررسی ابهام بر اساس اسناد بازیابی‌شده")
