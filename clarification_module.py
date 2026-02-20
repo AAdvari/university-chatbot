@@ -184,7 +184,6 @@ class ClarificationHandler:
             self._client,
             self._model,
             self._llm_messages(dialogue, clarifications),
-            temperature=0.01,
         )
         if thinking:
             print(f"[thinking clarify]\n{thinking[:500]}...\n")

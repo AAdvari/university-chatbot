@@ -20,6 +20,10 @@ QDRANT_HOST = os.environ.get("QDRANT_HOST", "127.0.0.1")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 COLLECTION_BACHELOR = "bachelor_laws"
 COLLECTION_MASTER = "master_laws"
+LEVEL_LABELS = {
+    COLLECTION_BACHELOR: "کارشناسی (bachelor)",
+    COLLECTION_MASTER: "کارشناسی ارشد (master)",
+}
 TOP_K_PER_COLLECTION = 5
 RAG_LLM_MODEL = os.environ.get("RAG_LLM_MODEL", "qwen3-32b")
 
@@ -39,7 +43,12 @@ Rules:
 - Use ONLY information from the context below. If the answer is not in the context, say so clearly.
 - Do not perform any action (enrollment, deletion, etc.); only explain the rules.
 - Be concise and cite the relevant part (e.g. ماده) when possible.
-- If the context is empty or irrelevant, say you cannot answer from the available regulations."""
+- If the context is empty or irrelevant, say you cannot answer from the available regulations.
+
+When the context is split by degree level  (e.g. کارشناسی vs کارشناسی ارشد) and in the rules that are relevant to the question there are differences, you MUST answer separately for each case. Use clear headings such as:
+- "If you are a bachelor student (کارشناسی), ..." / "اگر دانشجوی کارشناسی هستید، ..."
+- "If you are a master student (کارشناسی ارشد), ..." / "اگر دانشجوی کارشناسی ارشد هستید، ..."
+Only give one combined answer when the rules are the same for both levels; otherwise always separate by case."""
 
 OUT_OF_SCOPE_MESSAGE = "این سؤال به آیین‌نامه و قوانین آموزشی دانشگاه مربوط نیست. لطفاً فقط در مورد مقررات تحصیلی، واحدها، نمرات، و مسائل مشابه بپرسید."
 
@@ -77,7 +86,7 @@ class RAGLawsHandler:
         return self._embedding_model.encode(text, show_progress_bar=False).tolist()
 
     def _retrieve(self, query: str, top_k: int = TOP_K_PER_COLLECTION) -> List[Dict[str, Any]]:
-        """Retrieve from both bachelor and master collections."""
+        """Retrieve from both bachelor and master collections; each result includes 'collection' and 'level_label'."""
         vector = self._embed(query)
         results = []
         for coll in (COLLECTION_BACHELOR, COLLECTION_MASTER):
@@ -92,7 +101,11 @@ class RAGLawsHandler:
             for p in points:
                 payload = getattr(p, "payload", None) or (p.get("payload") if isinstance(p, dict) else None)
                 if payload:
-                    results.append(payload)
+                    results.append({
+                        **payload,
+                        "collection": coll,
+                        "level_label": LEVEL_LABELS.get(coll, coll),
+                    })
         return results
 
     def _is_relevant(self, question: str) -> bool:
@@ -124,7 +137,21 @@ class RAGLawsHandler:
             return (OUT_OF_SCOPE_MESSAGE, False)
 
         chunks = self._retrieve(question)
-        context = "\n\n---\n\n".join(
+        # Group by degree level so the LLM can answer per case when rules differ
+        by_level: Dict[str, List[Dict[str, Any]]] = {}
+        for c in chunks:
+            label = c.get("level_label") or c.get("collection") or "other"
+            by_level.setdefault(label, []).append(c)
+        context_parts = []
+        for level_label in (LEVEL_LABELS.get(COLLECTION_BACHELOR), LEVEL_LABELS.get(COLLECTION_MASTER)):
+            level_chunks = by_level.get(level_label, [])
+            if not level_chunks:
+                continue
+            block = "\n\n".join(
+                f"[{c.get('article_id', '')}] {c.get('text', '')}" for c in level_chunks
+            )
+            context_parts.append(f"## {level_label}\n\n{block}")
+        context = "\n\n---\n\n".join(context_parts) if context_parts else "\n\n---\n\n".join(
             f"[{c.get('article_id', '')}] {c.get('text', '')}" for c in chunks
         )
         if not context.strip():

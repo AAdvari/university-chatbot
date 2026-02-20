@@ -43,9 +43,10 @@ AMBIGUITY_DETECTION_SYSTEM = (
     "تو یک دستیار هوشمند هستی که در تحلیل آیین‌نامه‌های دانشگاهی تخصص داری.\n"
     "وظیفه تو این است که مشخص کنی آیا سوال کاربر، با توجه به اسناد بازیابی‌شده، مبهم است یا خیر.\n\n"
     "معیار ابهام (مهم):\n"
-    "- سوال را **مبهم** در نظر بگیر اگر تکیه کردن به اسناد مختلفی که مرتبط به سوال هستند (اسناد غیرمرتبط را درنظر نگیر)، پاسخ درست سیستم را عوض کند.\n"
+    "- اگر **همه اسناد بازیابی‌شده به سوال کاربر نامرتبط هستند یا سندی بازیابی نشده است**، سوال را **واضح** (غیرمبهم) در نظر بگیر و reason بگذار مثلاً «اسناد بازیابی‌شده به سوال مرتبط نیستند؛ رفع ابهام لازم نیست.»\n\n"
     "- سوال را **واضح** در نظر بگیر اگر همه اسناد بازیابی‌شده که مرتبط به سوال هستند به یک پاسخ درست منجر شوند، یا کاربر قبلاً مشخص کرده "
-    "کدام سند/شرایط (مثلاً مقطع تحصیلی) مد نظرش است.\n\n"
+    "کدام سند/شرایط (مثلاً مقطع تحصیلی) مد نظرش است.\n"
+    "- سوال را **مبهم** در نظر بگیر اگر تکیه کردن به اسناد مختلفی که مرتبط به سوال هستند (اسناد غیرمرتبط را درنظر نگیر)، پاسخ درست سیستم را عوض کند.\n"
     "پاسخ خود را دقیقاً به فرمت JSON زیر بده و هیچ متن اضافی ننویس:\n"
     '{"is_ambiguous": true/false, "reason": "دلیل به فارسی"}'
 )
@@ -127,14 +128,36 @@ def filter_docs_by_question(question: str, docs: list[dict]) -> list[dict]:
     return docs
 
 
-def no_relevant_docs(docs: list[dict], min_score: float = 0.4) -> bool:
+# Similarity threshold for document retrieval: keep only docs with score >= this (40%)
+SIMILARITY_THRESHOLD = 0.4
+
+# LLM: decide if the user's reply to a clarification question means "don't know" / "refuse to specify"
+REFUSAL_DETECTION_SYSTEM = """You are a classifier. You are given:
+1. A clarification question that was asked (in Persian).
+2. The user's reply (in Persian).
+
+Decide whether the user's reply indicates that they **do not know**, **do not want to specify**, or that **any option is fine** (e.g. "I don't know", "doesn't matter", "either way", "هرکدام", "نمیدانم", "مهم نیست"). If yes, output REFUSES.
+If the user gave a clear, specific answer (e.g. chose one option like "کارشناسی" or "ارشد"), output ANSWERS.
+
+Reply with exactly one word: REFUSES or ANSWERS. No other text."""
+
+
+def filter_docs_by_similarity(docs: list[dict], min_score: float | None = None) -> list[dict]:
+    """Filter out documents with similarity score lower than min_score (default 40%)."""
+    threshold = min_score if min_score is not None else SIMILARITY_THRESHOLD
+    return [d for d in docs if (d.get("score") or 0) >= threshold]
+
+
+def no_relevant_docs(docs: list[dict], min_score: float | None = None) -> bool:
     """
     True if we should skip doc-based disambiguation and pass the question directly
     to the next stage (e.g. RAG laws): no docs retrieved or all scores below min_score.
+    Uses SIMILARITY_THRESHOLD (40%) when min_score is not given.
     """
+    threshold = min_score if min_score is not None else SIMILARITY_THRESHOLD
     if not docs:
         return True
-    return all((d.get("score") or 0) < min_score for d in docs)
+    return all((d.get("score") or 0) < threshold for d in docs)
 
 
 class DocDisambiguation:
@@ -230,3 +253,14 @@ class DocDisambiguation:
             return parsed.get("reformulated_question", response)
         except (json.JSONDecodeError, ValueError):
             return response
+
+    def interprets_as_refusal(self, clarification_question: str, user_answer: str) -> bool:
+        """Use LLM to decide if the user's reply means they don't know or refuse to specify (treat as clarified, do not ask again)."""
+        if not (user_answer or "").strip():
+            return False
+        prompt = (
+            f"سوال رفع ابهام: {clarification_question}\n\n"
+            f"پاسخ کاربر: {user_answer.strip()}"
+        )
+        response = (self._call_llm(REFUSAL_DETECTION_SYSTEM, prompt) or "").strip().upper()
+        return "REFUSES" in response

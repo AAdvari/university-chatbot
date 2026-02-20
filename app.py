@@ -21,6 +21,7 @@ from app_ambiguity import (
     DocDisambiguation,
     format_documents,
     filter_docs_by_question,
+    filter_docs_by_similarity,
     no_relevant_docs,
 )
 
@@ -161,6 +162,7 @@ class DisambiguationRAG:
 
         session.round_num += 1
         docs = self.retrieve(question)
+        docs = filter_docs_by_similarity(docs)  # keep only docs with score >= 40%
         # If no relevant docs, skip doc-based disambiguation and pass question directly to RAG laws
         if no_relevant_docs(docs):
             result = RoundResult(
