@@ -1,12 +1,18 @@
 """
 RAG module over laws indices (bachelor_laws, master_laws).
 Embeds query, retrieves from both collections, applies guardrails (relevance),
-then generates answer with LLM (qwen3-32b). Refuses non-relevant queries.
+filters by similarity threshold, then generates answer with LLM (qwen3-32b). Refuses non-relevant queries.
 """
+import logging
 import os
 import dotenv
 dotenv.load_dotenv()
 from typing import List, Dict, Any, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Only include in context docs with similarity >= 40%
+SIMILARITY_THRESHOLD = 0.4
 
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
@@ -24,7 +30,7 @@ LEVEL_LABELS = {
     COLLECTION_BACHELOR: "کارشناسی (bachelor)",
     COLLECTION_MASTER: "کارشناسی ارشد (master)",
 }
-TOP_K_PER_COLLECTION = 5
+TOP_K_PER_COLLECTION = 10
 RAG_LLM_MODEL = os.environ.get("RAG_LLM_MODEL", "qwen3-32b")
 
 # Guardrail: is the query about university/educational regulations?
@@ -39,7 +45,7 @@ Reply only RELEVANT or IRRELEVANT, nothing else."""
 SYSTEM_ANSWER = """You are a helpful assistant that answers questions based ONLY on the provided context from university regulations (آیین‌نامه/قوانین آموزشی).
 
 Rules:
-- Answer in the same language as the user question (Persian or English).
+- Answer in persian
 - Use ONLY information from the context below. If the answer is not in the context, say so clearly.
 - Do not perform any action (enrollment, deletion, etc.); only explain the rules.
 - Be concise and cite the relevant part (e.g. ماده) when possible.
@@ -101,10 +107,16 @@ class RAGLawsHandler:
             for p in points:
                 payload = getattr(p, "payload", None) or (p.get("payload") if isinstance(p, dict) else None)
                 if payload:
+                    score = getattr(p, "score", None)
+                    if score is None and isinstance(p, dict):
+                        score = p.get("score", 0.0)
+                    if score is None:
+                        score = 0.0
                     results.append({
                         **payload,
                         "collection": coll,
                         "level_label": LEVEL_LABELS.get(coll, coll),
+                        "score": float(score),
                     })
         return results
 
@@ -137,6 +149,23 @@ class RAGLawsHandler:
             return (OUT_OF_SCOPE_MESSAGE, False)
 
         chunks = self._retrieve(question)
+        # Log all retrieved docs with their similarity scores
+        for i, c in enumerate(chunks, 1):
+            logger.info(
+                "RAG laws retrieved doc %d: collection=%s article_id=%s score=%.4f",
+                i,
+                c.get("collection", ""),
+                c.get("article_id", ""),
+                c.get("score", 0.0),
+            )
+        # Filter by similarity threshold (40%); only these go into context
+        chunks = [c for c in chunks if (c.get("score") or 0) >= SIMILARITY_THRESHOLD]
+        if chunks:
+            logger.info(
+                "RAG laws: keeping %d doc(s) above %.0f%% similarity for context",
+                len(chunks),
+                SIMILARITY_THRESHOLD * 100,
+            )
         # Group by degree level so the LLM can answer per case when rules differ
         by_level: Dict[str, List[Dict[str, Any]]] = {}
         for c in chunks:

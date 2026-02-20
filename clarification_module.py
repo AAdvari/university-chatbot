@@ -52,10 +52,11 @@ You are given:
 2. A list of clarifying questions that we need answers for.
 
 Your task:
-- If not all clarifying questions have been answered yet: ask the user for the next unanswered clarification. Use the wording of that clarification from the list as much as possible—do not rephrase creatively. Respond with ONLY that single question (Persian), no prefix or label.
-- If the dialogue already contains answers that cover all the clarifying points: respond with exactly the line "ALL_ANSWERED:" (in English) followed by a single rephrased, clear, unified question in Persian that incorporates all the user's answers. The unified question should be the one clear question we can use to answer the user's intent.
+- If the user indicates they **do not want to answer** a clarification question or **do not know** the answer (e.g. نمیدانم، مهم نیست، هرکدام): **ignore that question**—do not ask it again. Skip it and either ask the next unanswered clarification from the list, or if no more are needed, respond with "ALL_ANSWERED:" and a unified question.
+- If not all clarifying questions have been answered yet (and the user has not said to skip): ask the user for the next unanswered clarification. Use the wording of that clarification from the list as much as possible. Respond with ONLY that single question (Persian), no prefix or label.
+- If the dialogue already contains answers that cover all the clarifying points, or the user skipped/did not specify some: respond with exactly the line "ALL_ANSWERED:" (in English) followed by a single rephrased, clear, unified question in Persian that incorporates the user's answers and reflects that any skipped question was ignored (user did not specify that aspect).
 
-Important: When asking a clarifying question, stick to the given list wording; minimize unnecessary creativity.
+Important: When the user does not want to answer or does not know, ignore that question and move on; do not insist.
 
 Output format:
 - Either: one clarifying question (Persian), preferably verbatim from the list.
@@ -63,7 +64,7 @@ Output format:
 
 SYSTEM_REPHRASE = """You are a helpful assistant. You are given the full dialogue so far: the user's original question and every clarifying question from the assistant with the user's answers.
 
-Your task: Using ALL the information in this dialogue, write a single clear, unambiguous question in Persian that fully expresses what the user wants to know. The question must incorporate the original intent plus every clarification the user provided. Output only that one question, nothing else."""
+Your task: Using ALL the information in this dialogue, write a single clear, unambiguous question in Persian that fully expresses what the user wants to know. The question must incorporate the original intent plus every clarification the user provided. If the user did not want to answer a clarification or said they do not know, **ignore that question**—do not require an answer. For those points, the unified question may note that the user did not specify (e.g. "بدون مشخص بودن مقطع" or "با فرض هر حالت") so the system can still answer. Output only that one question, nothing else."""
 
 
 class ClarificationHandler:
